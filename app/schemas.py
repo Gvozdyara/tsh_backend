@@ -6,14 +6,30 @@ frontend can consume them directly.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .utils import new_id
 
 Lang = Literal["ru", "en", "es"]
+AccessRole = Literal["admin", "moderator", "user"]
+
+USERNAME_PATTERN = re.compile(r"^\S{3,32}$")
+MIN_PASSWORD_LENGTH = 8
+# bcrypt only uses the first 72 bytes; reject longer input instead of silently
+# truncating it.
+MAX_PASSWORD_BYTES = 72
+
+
+def _validate_password(value: str) -> str:
+    if len(value) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    if len(value.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise ValueError(f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
+    return value
 
 
 def to_camel(name: str) -> str:
@@ -35,14 +51,78 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, value: str) -> str:
+        value = value.strip()
+        if not USERNAME_PATTERN.fullmatch(value):
+            raise ValueError(
+                "Username must be 3-32 characters without whitespace"
+            )
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return _validate_password(value)
+
+
 class SessionOut(ApiModel):
     username: str
-    role: Literal["admin", "reader"]
+    role: AccessRole
     admin: bool
+    moderator: bool
+    can_edit: bool
     expires_at: datetime
     server_time: datetime
     languages: tuple[str, ...] = ("ru", "en", "es")
     domain: str = ""
+
+
+class RegistrationOut(ApiModel):
+    """Self-registration result: no session until an admin approves."""
+
+    username: str
+    role: AccessRole = "user"
+    approved: bool = False
+    message: str = "Account created - an administrator must approve it"
+
+
+class AuthConfigOut(ApiModel):
+    registration_enabled: bool = True
+    approval_required: bool = True
+    roles: tuple[str, ...] = ("admin", "moderator", "user")
+    min_password_length: int = MIN_PASSWORD_LENGTH
+
+
+class UserOut(ApiModel):
+    username: str
+    role: AccessRole
+    active: bool
+    approved: bool
+    created_at: datetime | None = None
+    last_login_at: datetime | None = None
+
+
+class UserListOut(ApiModel):
+    total: int
+    users: list[UserOut] = Field(default_factory=list)
+
+
+class UserUpdate(BaseModel):
+    role: AccessRole | None = None
+    active: bool | None = None
+    approved: bool | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_password(value)
 
 
 # ------------------------------------------------------------------ content

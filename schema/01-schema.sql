@@ -93,6 +93,41 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS ix_audit_created ON audit_log (created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_audit_article ON audit_log (article_id);
 
+-- Application users. Passwords are bcrypt hashes, never plain text. The
+-- ``TSH_USERS`` environment variable is only used to bootstrap missing
+-- accounts on start; after that the database is the source of truth.
+--   user      - read only
+--   moderator - create / edit / move / reorder articles
+--   admin     - everything, including delete, import/export and user roles
+--
+-- is_approved: self-registered accounts start unapproved and cannot sign in or
+-- obtain a session until an admin approves them. Bootstrap accounts from
+-- TSH_USERS are approved. (Pre-existing installations are backfilled as
+-- approved by the ALTER below.)
+CREATE TABLE IF NOT EXISTS users (
+    username      TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'user',
+    is_active     BOOLEAN NOT NULL DEFAULT true,
+    is_approved   BOOLEAN NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at TIMESTAMPTZ,
+    CONSTRAINT users_username_not_blank CHECK (btrim(username) <> ''),
+    CONSTRAINT users_password_hash_not_blank CHECK (password_hash <> ''),
+    CONSTRAINT users_role_check CHECK (role IN ('admin', 'moderator', 'user'))
+);
+
+-- Existing volumes: add the approval flag and trust the accounts that were
+-- already there. New rows default to unapproved.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users ALTER COLUMN is_approved SET DEFAULT false;
+
+-- Case-insensitive unique logins: "Admin" and "admin" are the same account.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_username_lower ON users (lower(username));
+CREATE INDEX IF NOT EXISTS ix_users_role ON users (role) WHERE is_active;
+CREATE INDEX IF NOT EXISTS ix_users_approved ON users (is_approved) WHERE NOT is_approved;
+
 -- Per user read cursor for the updates counter.
 CREATE TABLE IF NOT EXISTS read_marks (
     username     TEXT PRIMARY KEY,

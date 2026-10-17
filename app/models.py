@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -170,6 +171,60 @@ class AuditLog(Base):
     __table_args__ = (Index("ix_audit_created", "created_at"),)
 
 
+class User(Base):
+    """Application account.
+
+    Passwords are stored as bcrypt hashes (see ``app.auth.hash_password``).
+    Roles form a hierarchy: ``user`` (read only) < ``moderator`` (may author
+    articles) < ``admin`` (everything, including user management).
+    """
+
+    __tablename__ = "users"
+
+    username: Mapped[str] = mapped_column(Text, primary_key=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False, server_default="user")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    #: Self-registered accounts must be approved by an admin before login.
+    is_approved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('admin', 'moderator', 'user')", name="users_role_check"
+        ),
+        CheckConstraint("btrim(username) <> ''", name="users_username_not_blank"),
+        CheckConstraint(
+            "password_hash <> ''", name="users_password_hash_not_blank"
+        ),
+        Index("ux_users_username_lower", func.lower(username), unique=True),
+        Index("ix_users_role", "role"),
+    )
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+    @property
+    def is_moderator(self) -> bool:
+        return self.role in ("admin", "moderator")
+
+
 class ReadMark(Base):
     """Per-user read cursor for the legacy 'updates' counter."""
 
@@ -196,6 +251,7 @@ __all__ = [
     "Base",
     "ReadMark",
     "ROOT_PARENT",
+    "User",
     "new_id",
     "text",
 ]

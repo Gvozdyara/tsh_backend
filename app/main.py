@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from . import auth
 from .db import SessionFactory
 from .dbmigrate import apply_schema
 from .importer import import_legacy
@@ -47,6 +48,13 @@ async def lifespan(app: FastAPI):
     warn_about_defaults()
 
     await apply_schema()
+    try:
+        async with SessionFactory() as session:
+            await auth.bootstrap_users(session)
+            await session.commit()
+    except Exception:
+        log.exception("bootstrap users failed (existing accounts still work)")
+
     if settings.auto_migrate:
         try:
             async with SessionFactory() as session:

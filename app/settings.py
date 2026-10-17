@@ -44,18 +44,31 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 @dataclass(frozen=True)
-class User:
+class SeedUser:
+    """Account from ``TSH_USERS`` used only to bootstrap the ``users`` table."""
+
     username: str
     password: str
-    role: str  # "admin" | "reader"
+    role: str  # "admin" | "moderator" | "user"
 
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
 
 
-def _parse_users(raw: str) -> list[User]:
-    users: list[User] = []
+#: ``reader`` is the legacy name of the read-only role.
+ROLE_ALIASES = {"reader": "user"}
+USER_ROLES = ("admin", "moderator", "user")
+
+
+def normalize_role(role: str | None, default: str = "user") -> str:
+    candidate = (role or "").strip().lower()
+    candidate = ROLE_ALIASES.get(candidate, candidate)
+    return candidate if candidate in USER_ROLES else default
+
+
+def _parse_users(raw: str) -> list[SeedUser]:
+    users: list[SeedUser] = []
     for chunk in raw.split(","):
         chunk = chunk.strip()
         if not chunk:
@@ -65,11 +78,9 @@ def _parse_users(raw: str) -> list[User]:
             continue
         username = parts[0].strip()
         password = parts[1]
-        role = (parts[2].strip().lower() if len(parts) > 2 else "reader")
-        if role not in {"admin", "reader"}:
-            role = "reader"
+        role = normalize_role(parts[2] if len(parts) > 2 else None)
         if username:
-            users.append(User(username=username, password=password, role=role))
+            users.append(SeedUser(username=username, password=password, role=role))
     return users
 
 
@@ -83,14 +94,19 @@ class Settings:
     )
     db_echo: bool = field(default_factory=lambda: _env_bool("TSH_DB_ECHO", False))
 
-    #: Only admins may mutate articles. Readers get a read-only knowledge base.
-    users: tuple[User, ...] = field(
+    #: Bootstrap accounts, inserted only when they do not exist yet. Afterwards
+    #: users live in the database and the admin manages them from the UI.
+    users: tuple[SeedUser, ...] = field(
         default_factory=lambda: tuple(
-            _parse_users(_env("TSH_USERS", "admin:admin:admin,guest:guest:reader"))
+            _parse_users(_env("TSH_USERS", "admin:admin:admin,guest:guest:user"))
         )
     )
     readonly_password: str = field(
         default_factory=lambda: _env("TSH_READONLY_PASSWORD", "")
+    )
+    #: Self-service registration on the sign-in page.
+    registration_enabled: bool = field(
+        default_factory=lambda: _env_bool("TSH_REGISTRATION_ENABLED", True)
     )
     session_ttl_minutes: int = field(
         default_factory=lambda: _env_int("TSH_SESSION_TTL_MINUTES", 720)
@@ -135,5 +151,9 @@ class Settings:
 
 settings = Settings()
 
-#: Insecure default that must be changed in production.
-INSECURE_DEFAULTS = {"admin:admin:admin", "guest:guest:reader"}
+#: Insecure defaults that must be changed in production.
+INSECURE_DEFAULTS = {
+    "admin:admin:admin",
+    "guest:guest:user",
+    "guest:guest:reader",
+}
